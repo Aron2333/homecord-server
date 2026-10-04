@@ -102,6 +102,10 @@ async function populateMessages(messages: any[], serverId?: string | null): Prom
 
   return messages.map(m => ({
     ...m,
+    is_edited: Boolean(m.is_edited),
+    is_pinned: Boolean(m.is_pinned),
+    type: m.type || 'text',
+    call_metadata: typeof m.call_metadata === 'string' ? JSON.parse(m.call_metadata) : (m.call_metadata || null),
     sender: userMap.get(m.sender_id),
     attachments: attachmentMap.get(m.id) || [],
     reactions: reactionMap.get(m.id) || {},
@@ -229,7 +233,7 @@ router.post('/channels/:channelId', authenticateToken, uploadMiddleware.array('f
 router.post('/channels/:channelId/messages', authenticateToken, uploadMiddleware.array('files', 10), handleSendChannelMessage);
 
 // 3. Get DM conversations list
-router.get('/dms', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+const handleGetDMsList = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const userId = req.user!.id;
 
@@ -288,7 +292,10 @@ router.get('/dms', authenticateToken, async (req: AuthenticatedRequest, res: Res
     console.error('Fetch DMs list error:', error);
     res.status(500).json({ error: 'Hiba a privát beszélgetések lekérésekor' });
   }
-});
+};
+
+router.get('/', authenticateToken, handleGetDMsList);
+router.get('/dms', authenticateToken, handleGetDMsList);
 
 // 4. Get DM messages with a specific user
 const handleGetDMMessages = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -326,12 +333,14 @@ const handleGetDMMessages = async (req: AuthenticatedRequest, res: Response): Pr
 
 router.get('/dms/:recipientId', authenticateToken, handleGetDMMessages);
 router.get('/dms/:recipientId/messages', authenticateToken, handleGetDMMessages);
+router.get('/:recipientId', authenticateToken, handleGetDMMessages);
+router.get('/:recipientId/messages', authenticateToken, handleGetDMMessages);
 
 // 5. Send DM message
 const handleSendDM = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
     const recipientId = req.params.recipientId || req.params.id || req.body.recipient_id || req.body.recipientId;
-    const { content, reply_to_id } = req.body;
+    const { content, reply_to_id, type, call_metadata } = req.body;
     const files = req.files as Express.Multer.File[] | undefined;
     const senderId = req.user!.id;
 
@@ -363,11 +372,13 @@ const handleSendDM = async (req: AuthenticatedRequest, res: Response): Promise<v
     }
 
     const messageId = uuidv4();
+    const msgType = type || 'text';
+    const metadataStr = call_metadata ? (typeof call_metadata === 'string' ? call_metadata : JSON.stringify(call_metadata)) : null;
 
     await withTransaction(async (conn) => {
       await conn.query(
-        'INSERT INTO messages (id, dm_recipient_id, sender_id, content, reply_to_id, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
-        [messageId, recipientId, senderId, (content || '').trim(), reply_to_id || null]
+        'INSERT INTO messages (id, dm_recipient_id, sender_id, content, type, call_metadata, reply_to_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
+        [messageId, recipientId, senderId, (content || '').trim(), msgType, metadataStr, reply_to_id || null]
       );
 
       if (files && files.length > 0) {
@@ -393,6 +404,68 @@ const handleSendDM = async (req: AuthenticatedRequest, res: Response): Promise<v
 router.post('/dms', authenticateToken, uploadMiddleware.array('files', 10), handleSendDM);
 router.post('/dms/:recipientId', authenticateToken, uploadMiddleware.array('files', 10), handleSendDM);
 router.post('/dms/:recipientId/messages', authenticateToken, uploadMiddleware.array('files', 10), handleSendDM);
+router.post('/:recipientId', authenticateToken, uploadMiddleware.array('files', 10), handleSendDM);
+router.post('/:recipientId/messages', authenticateToken, uploadMiddleware.array('files', 10), handleSendDM);
+
+// 5b. Log Call Event
+const handleLogCallEvent = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { recipientId, channelId, status, duration, startedAt, endedAt } = req.body;
+    const callerId = req.user!.id;
+    const callId = uuidv4();
+    const messageId = uuidv4();
+
+    const durationSec = parseInt(duration || '0', 10);
+    const durationFormatted = durationSec > 60
+      ? `${Math.floor(durationSec / 60)} perc ${durationSec % 60} mp`
+      : `${durationSec} mp`;
+
+    let content = '📞 Hívás véget ért';
+    if (status === 'started') {
+      content = '📞 Hívás kezdeményezve';
+    } else if (status === 'missed') {
+      content = '📞 Nem fogadott hívás';
+    } else if (durationSec > 0) {
+      content = `📞 Hívás véget ért (${durationFormatted})`;
+    }
+
+    const callMeta = {
+      callId,
+      callerId,
+      receiverId: recipientId || null,
+      channelId: channelId || null,
+      status: status || 'ended',
+      duration: durationSec,
+      durationFormatted,
+      startedAt: startedAt || new Date().toISOString(),
+      endedAt: endedAt || new Date().toISOString()
+    };
+
+    // Save to call_logs
+    await query(
+      `INSERT INTO call_logs (id, caller_id, receiver_id, channel_id, status, duration, started_at, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, NOW()), COALESCE(?, NOW()))`,
+      [callId, callerId, recipientId || null, channelId || null, status || 'ended', durationSec, startedAt || null, endedAt || null]
+    );
+
+    // Save message
+    await query(
+      `INSERT INTO messages (id, channel_id, dm_recipient_id, sender_id, content, type, call_metadata, created_at)
+       VALUES (?, ?, ?, ?, ?, 'call', ?, NOW())`,
+      [messageId, channelId || null, recipientId || null, callerId, content, JSON.stringify(callMeta)]
+    );
+
+    const msgRows = await query<any[]>('SELECT * FROM messages WHERE id = ?', [messageId]);
+    const populated = await populateMessages(msgRows, null);
+    res.status(201).json(populated[0]);
+  } catch (error) {
+    console.error('Log call event error:', error);
+    res.status(500).json({ error: 'Hiba a hívásnaplózáskor' });
+  }
+};
+
+router.post('/calls/event', authenticateToken, handleLogCallEvent);
+router.post('/dms/:recipientId/call-event', authenticateToken, handleLogCallEvent);
 
 // 6. Edit message (PUT & PATCH, /:messageId & /messages/:messageId)
 const handleEditMessage = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
