@@ -319,7 +319,46 @@ const TABLE_DEFINITIONS = [
     UNIQUE KEY uq_voice_user (user_id),
     CONSTRAINT fk_vs_channel FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
     CONSTRAINT fk_vs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+  `CREATE TABLE IF NOT EXISTS system_permissions (
+    name VARCHAR(64) PRIMARY KEY,
+    description VARCHAR(255) NOT NULL,
+    category VARCHAR(32) NOT NULL DEFAULT 'GENERAL',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+  `CREATE TABLE IF NOT EXISTS notifications (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    type ENUM('FRIEND_REQUEST', 'MENTION', 'DM', 'SERVER_EVENT', 'MODERATION') NOT NULL,
+    title VARCHAR(128) NOT NULL,
+    content TEXT NOT NULL,
+    link VARCHAR(255) DEFAULT NULL,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_notif_user_unread (user_id, is_read, created_at),
+    CONSTRAINT fk_notif_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+  `CREATE TABLE IF NOT EXISTS screen_share_sessions (
+    id VARCHAR(36) PRIMARY KEY,
+    channel_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    resolution ENUM('720p', '1080p', '1440p') NOT NULL DEFAULT '1080p',
+    fps INT NOT NULL DEFAULT 60,
+    has_audio BOOLEAN NOT NULL DEFAULT TRUE,
+    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_screenshare_user (user_id),
+    INDEX idx_sss_channel (channel_id),
+    CONSTRAINT fk_sss_channel FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+    CONSTRAINT fk_sss_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+  `CREATE OR REPLACE VIEW server_tags AS SELECT * FROM tags;`,
+  `CREATE OR REPLACE VIEW user_server_tags AS SELECT * FROM member_tags;`,
+  `CREATE OR REPLACE VIEW server_invites AS SELECT * FROM invites;`,
+  `CREATE OR REPLACE VIEW message_attachments AS SELECT * FROM attachments;`
 ];
 
 export async function initDatabase(): Promise<void> {
