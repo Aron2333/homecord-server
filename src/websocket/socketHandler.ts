@@ -182,13 +182,17 @@ export function setupSocketIO(io: SocketIOServer): void {
 
       voiceChannels.get(channelId)!.set(userId, participant);
 
-      // Record in database
-      await query(
-        `INSERT INTO voice_sessions (id, channel_id, user_id, is_muted, is_deafened, is_screensharing, is_video, joined_at)
-         VALUES (UUID(), ?, ?, ?, ?, ?, ?, NOW())
-         ON DUPLICATE KEY UPDATE channel_id = VALUES(channel_id), is_muted = VALUES(is_muted), is_deafened = VALUES(is_deafened), is_screensharing = VALUES(is_screensharing), is_video = VALUES(is_video)`,
-        [channelId, userId, participant.isMuted, participant.isDeafened, participant.isScreenSharing, participant.isVideo]
-      );
+      // Record in database if it is a server channel
+      try {
+        await query(
+          `INSERT INTO voice_sessions (id, channel_id, user_id, is_muted, is_deafened, is_screensharing, is_video, joined_at)
+           VALUES (UUID(), ?, ?, ?, ?, ?, ?, NOW())
+           ON DUPLICATE KEY UPDATE channel_id = VALUES(channel_id), is_muted = VALUES(is_muted), is_deafened = VALUES(is_deafened), is_screensharing = VALUES(is_screensharing), is_video = VALUES(is_video)`,
+          [channelId, userId, participant.isMuted, participant.isDeafened, participant.isScreenSharing, participant.isVideo]
+        );
+      } catch (err) {
+        // DM voice call or virtual channel without foreign key reference
+      }
 
       // Send existing participants in this channel to the joining user
       const currentParticipants = Array.from(voiceChannels.get(channelId)!.values());
@@ -198,12 +202,16 @@ export function setupSocketIO(io: SocketIOServer): void {
       socket.to(`voice:${channelId}`).emit('voice:user-joined', { channelId, participant });
 
       // Notify server members for channel participant badge
-      const chan = await query<any[]>('SELECT server_id FROM channels WHERE id = ?', [channelId]);
-      if (chan && chan.length > 0) {
-        io.to(`server:${chan[0].server_id}`).emit('voice:channel-update', {
-          channelId,
-          participants: currentParticipants
-        });
+      try {
+        const chan = await query<any[]>('SELECT server_id FROM channels WHERE id = ?', [channelId]);
+        if (chan && chan.length > 0) {
+          io.to(`server:${chan[0].server_id}`).emit('voice:channel-update', {
+            channelId,
+            participants: currentParticipants
+          });
+        }
+      } catch (e) {
+        // Ignore for DM calls
       }
     });
 
@@ -213,6 +221,38 @@ export function setupSocketIO(io: SocketIOServer): void {
         await leaveVoiceChannel(socket, channelId, io);
         socketVoiceMap.delete(socket.id);
       }
+    });
+
+    // DM Call Signaling
+    socket.on('dm:call-start', (data: { recipientId: string; callerName: string; callerAvatar?: string; channelId: string; isVideo?: boolean }) => {
+      const { recipientId, callerName, callerAvatar, channelId, isVideo } = data;
+      io.to(`user:${recipientId}`).emit('dm:incoming-call', {
+        callerId: userId,
+        callerName: callerName || user.display_name,
+        callerAvatar: callerAvatar || user.avatar_url,
+        channelId,
+        isVideo: !!isVideo
+      });
+    });
+
+    socket.on('dm:call-accept', (data: { callerId: string; channelId: string }) => {
+      io.to(`user:${data.callerId}`).emit('dm:call-accepted', {
+        responderId: userId,
+        channelId: data.channelId
+      });
+    });
+
+    socket.on('dm:call-reject', (data: { callerId: string }) => {
+      io.to(`user:${data.callerId}`).emit('dm:call-rejected', {
+        responderId: userId
+      });
+    });
+
+    socket.on('dm:call-end', (data: { recipientId: string; channelId: string }) => {
+      io.to(`user:${data.recipientId}`).emit('dm:call-ended', {
+        fromUserId: userId,
+        channelId: data.channelId
+      });
     });
 
     // WebRTC Signaling Relay
