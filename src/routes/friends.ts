@@ -212,6 +212,15 @@ router.post('/request', authenticateToken, async (req: AuthenticatedRequest, res
       [requestId, userId, targetId]
     );
 
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${targetId}`).emit('friend:request', {
+        requestId,
+        senderName: req.user!.display_name || req.user!.username
+      });
+      io.to(`user:${userId}`).emit('friend:update');
+    }
+
     res.json({ message: `Barátkérés sikeresen elküldve neki: ${targetUsers[0].display_name}!` });
   } catch (error) {
     console.error('Send friend request error:', error);
@@ -247,6 +256,11 @@ const handleAcceptFriendRequest = async (req: AuthenticatedRequest, res: Respons
       );
     });
 
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${friendId}`).to(`user:${userId}`).emit('friend:update');
+    }
+
     res.json({ message: 'Barátkérés sikeresen elfogadva!' });
   } catch (error) {
     console.error('Accept friend request error:', error);
@@ -264,6 +278,12 @@ const handleDeclineFriendRequest = async (req: AuthenticatedRequest, res: Respon
     const userId = req.user!.id;
 
     await query('DELETE FROM friend_requests WHERE (id = ? OR sender_id = ?) AND receiver_id = ?', [paramId, paramId, userId]);
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${userId}`).emit('friend:update');
+    }
+
     res.json({ message: 'Barátkérés elutasítva' });
   } catch (error) {
     console.error('Decline friend request error:', error);
@@ -281,6 +301,12 @@ router.post('/cancel/:requestId', authenticateToken, async (req: AuthenticatedRe
     const userId = req.user!.id;
 
     await query('DELETE FROM friend_requests WHERE id = ? AND sender_id = ?', [requestId, userId]);
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${userId}`).emit('friend:update');
+    }
+
     res.json({ message: 'Barátkérés visszavonva' });
   } catch (error) {
     console.error('Cancel friend request error:', error);
@@ -298,6 +324,11 @@ router.delete('/:friendId', authenticateToken, async (req: AuthenticatedRequest,
       'DELETE FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)',
       [userId, friendId, friendId, userId]
     );
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${userId}`).to(`user:${friendId}`).emit('friend:update');
+    }
 
     res.json({ message: 'Barát sikeresen eltávolítva' });
   } catch (error) {
