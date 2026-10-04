@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: homecord-server
+    runtime: node
+    plan: free
+    region: frankfurt # Frankfurt: ultra-low latency to Hungary (~20ms)
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: API_URL
+        value: https://api.homecord.hu
+      - key: WS_URL
+        value: wss://api.homecord.hu
+      - key: CLIENT_URL
+        value: https://homecord.hu
+      - key: DB_PORT
+        value: 3306
+      - key: DB_HOST
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
