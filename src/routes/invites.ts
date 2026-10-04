@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { query, withTransaction } from '../database/db.js';
 import { authenticateToken, AuthenticatedRequest } from '../middlewares/auth.js';
-import { hasPermission } from '../services/permissionService.js';
+import { hasPermission, isServerOwner } from '../services/permissionService.js';
 import { logAuditEvent } from '../services/auditService.js';
 
 const router = Router();
@@ -23,10 +23,14 @@ const handleCreateInvite = async (req: AuthenticatedRequest, res: Response): Pro
     const { max_uses, expires_hours } = req.body;
     const userId = req.user!.id;
 
-    const canInvite = await hasPermission(serverId, userId, 'MANAGE_INVITES') ||
-                      await hasPermission(serverId, userId, 'MANAGE_SERVER');
-    if (!canInvite) {
-      res.status(403).json({ error: 'Nincs jogosultságod meghívók készítéséhez!' });
+    const isOwner = await isServerOwner(serverId, userId);
+    const memberRows = await query<any[]>(
+      'SELECT id FROM server_members WHERE server_id = ? AND user_id = ?',
+      [serverId, userId]
+    );
+
+    if (!isOwner && (!memberRows || memberRows.length === 0)) {
+      res.status(403).json({ error: 'Csak a szerver tagjai hozhatnak létre meghívót!' });
       return;
     }
 
@@ -38,8 +42,8 @@ const handleCreateInvite = async (req: AuthenticatedRequest, res: Response): Pro
     }
 
     await query(
-      `INSERT INTO invites (id, code, server_id, inviter_id, max_uses, uses, expires_at, created_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?, NOW())`,
+      `INSERT INTO invites (id, code, server_id, inviter_id, max_uses, uses, is_revoked, expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, 0, FALSE, ?, NOW())`,
       [inviteId, code, serverId, userId, max_uses ? Number(max_uses) : 0, expiresAt]
     );
 
@@ -71,25 +75,40 @@ router.post('/servers/:serverId/invites', authenticateToken, handleCreateInvite)
 router.post('/:serverId/invites', authenticateToken, handleCreateInvite);
 router.post('/:serverId', authenticateToken, handleCreateInvite);
 
+function extractCleanCode(raw: string): string {
+  let clean = (raw || '').trim().replace(/\/+$/, '');
+  if (clean.includes('/')) {
+    const parts = clean.split('/');
+    clean = parts[parts.length - 1];
+  }
+  return clean.trim().toUpperCase();
+}
+
 // Get invite preview info
 router.get('/:code', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { code } = req.params;
+    const cleanCode = extractCleanCode(req.params.code);
     const invites = await query<any[]>(
       `SELECT i.*, s.name as server_name, s.icon_url, s.description, u.username as inviter_username
        FROM invites i
        JOIN servers s ON s.id = i.server_id
        JOIN users u ON u.id = i.inviter_id
-       WHERE i.code = ?`,
-      [code.trim().toUpperCase()]
+       WHERE UPPER(TRIM(i.code)) = ?`,
+      [cleanCode]
     );
 
     if (!invites || invites.length === 0) {
-      res.status(404).json({ error: 'Érvénytelen vagy lejárt meghívókód!' });
+      res.status(404).json({ error: 'Érvénytelen vagy nem létező meghívókód!' });
       return;
     }
 
     const inv = invites[0];
+
+    // Check revoked
+    if (inv.is_revoked) {
+      res.status(410).json({ error: 'Ez a meghívó vissza lett vonva!' });
+      return;
+    }
 
     // Check expiration
     if (inv.expires_at && new Date(inv.expires_at) < new Date()) {
@@ -131,20 +150,26 @@ router.get('/:code', authenticateToken, async (req: AuthenticatedRequest, res: R
 // Join server via invite
 router.post('/:code/join', authenticateToken, async (req: AuthenticatedRequest, res: Response): Promise<void> => {
   try {
-    const { code } = req.params;
+    const cleanCode = extractCleanCode(req.params.code);
     const userId = req.user!.id;
 
     const invites = await query<any[]>(
-      'SELECT * FROM invites WHERE code = ?',
-      [code.trim().toUpperCase()]
+      'SELECT * FROM invites WHERE UPPER(TRIM(code)) = ?',
+      [cleanCode]
     );
 
     if (!invites || invites.length === 0) {
-      res.status(404).json({ error: 'Érvénytelen meghívókód!' });
+      res.status(404).json({ error: 'Érvénytelen vagy nem létező meghívókód!' });
       return;
     }
 
     const inv = invites[0];
+
+    // Check revoked
+    if (inv.is_revoked) {
+      res.status(410).json({ error: 'Ez a meghívó vissza lett vonva!' });
+      return;
+    }
 
     // Check expiration
     if (inv.expires_at && new Date(inv.expires_at) < new Date()) {
@@ -195,7 +220,7 @@ router.post('/:code/join', authenticateToken, async (req: AuthenticatedRequest, 
       action: 'MEMBER_JOIN',
       targetId: userId,
       targetType: 'USER',
-      metadata: { inviteCode: code }
+      metadata: { inviteCode: cleanCode }
     });
 
     const serverRows = await query<any[]>('SELECT * FROM servers WHERE id = ?', [inv.server_id]);
