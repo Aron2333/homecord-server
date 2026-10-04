@@ -35,6 +35,7 @@ const io = new SocketIOServer(server, {
 });
 
 app.set('trust proxy', true);
+app.set('io', io);
 
 // Middleware
 app.use(cors({
