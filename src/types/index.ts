@@ -85,6 +85,8 @@ export interface Message {
   sender_id: string;
   content: string;
   reply_to_id: string | null;
+  type?: string;
+  call_metadata?: any;
   is_edited: boolean;
   created_at: string;
   updated_at: string;
