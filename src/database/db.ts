@@ -214,6 +214,8 @@ const TABLE_DEFINITIONS = [
     dm_recipient_id VARCHAR(36) DEFAULT NULL,
     sender_id VARCHAR(36) NOT NULL,
     content TEXT NOT NULL,
+    type VARCHAR(32) NOT NULL DEFAULT 'text',
+    call_metadata JSON DEFAULT NULL,
     reply_to_id VARCHAR(36) DEFAULT NULL,
     is_edited BOOLEAN DEFAULT FALSE,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -353,6 +355,18 @@ const TABLE_DEFINITIONS = [
     INDEX idx_sss_channel (channel_id),
     CONSTRAINT fk_sss_channel FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
     CONSTRAINT fk_sss_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
+
+  `CREATE TABLE IF NOT EXISTS call_logs (
+    id VARCHAR(36) PRIMARY KEY,
+    caller_id VARCHAR(36) NOT NULL,
+    receiver_id VARCHAR(36) DEFAULT NULL,
+    channel_id VARCHAR(36) DEFAULT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ended',
+    duration INT DEFAULT 0,
+    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ended_at DATETIME DEFAULT NULL,
+    INDEX idx_call_pair (caller_id, receiver_id, started_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`,
 
   `CREATE OR REPLACE VIEW server_tags AS SELECT * FROM tags;`,
