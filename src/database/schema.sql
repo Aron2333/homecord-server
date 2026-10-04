@@ -308,6 +308,8 @@ CREATE TABLE IF NOT EXISTS messages (
   dm_recipient_id VARCHAR(36) DEFAULT NULL,
   sender_id VARCHAR(36) NOT NULL,
   content TEXT NOT NULL,
+  type VARCHAR(32) NOT NULL DEFAULT 'text',
+  call_metadata JSON DEFAULT NULL,
   reply_to_id VARCHAR(36) DEFAULT NULL,
   is_edited BOOLEAN NOT NULL DEFAULT FALSE,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -319,6 +321,18 @@ CREATE TABLE IF NOT EXISTS messages (
   CONSTRAINT fk_msg_sender FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_msg_recipient FOREIGN KEY (dm_recipient_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_msg_reply FOREIGN KEY (reply_to_id) REFERENCES messages(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS call_logs (
+  id VARCHAR(36) PRIMARY KEY,
+  caller_id VARCHAR(36) NOT NULL,
+  receiver_id VARCHAR(36) DEFAULT NULL,
+  channel_id VARCHAR(36) DEFAULT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'ended',
+  duration INT DEFAULT 0,
+  started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ended_at DATETIME DEFAULT NULL,
+  INDEX idx_call_pair (caller_id, receiver_id, started_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ----------------------------------------------------------------------------
