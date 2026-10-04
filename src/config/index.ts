@@ -21,7 +21,11 @@ export const CONFIG = {
     connectionLimit: 20,
     queueLimit: 0,
     enableKeepAlive: true,
-    keepAliveInitialDelay: 0
+    keepAliveInitialDelay: 0,
+    ssl: (process.env.DB_SSL === 'true' || (process.env.DB_HOST && (process.env.DB_HOST.includes('tidbcloud.com') || process.env.DB_HOST.includes('aivencloud.com')))) ? {
+      minVersion: 'TLSv1.2',
+      rejectUnauthorized: false
+    } : undefined
   },
 
   JWT: {
