@@ -222,6 +222,12 @@ const handleSendChannelMessage = async (req: AuthenticatedRequest, res: Response
 
     const msgRows = await query<any[]>('SELECT * FROM messages WHERE id = ?', [messageId]);
     const populated = await populateMessages(msgRows, serverId);
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`channel:${channelId}`).emit('message:new', populated[0]);
+    }
+
     res.status(201).json(populated[0]);
   } catch (error) {
     console.error('Send channel message error:', error);
@@ -242,7 +248,7 @@ const handleGetDMsList = async (req: AuthenticatedRequest, res: Response): Promi
       `SELECT DISTINCT
          CASE WHEN sender_id = ? THEN dm_recipient_id ELSE sender_id END as partner_id
        FROM messages
-       WHERE channel_id IS NULL AND (sender_id = ? OR dm_recipient_id = ?)`,
+       WHERE (channel_id IS NULL OR channel_id = '' OR channel_id = 'null') AND (sender_id = ? OR dm_recipient_id = ?)`,
       [userId, userId, userId]
     );
 
@@ -263,7 +269,7 @@ const handleGetDMsList = async (req: AuthenticatedRequest, res: Response): Promi
     for (const u of users) {
       const lastMsgRows = await query<any[]>(
         `SELECT * FROM messages
-         WHERE channel_id IS NULL AND (
+         WHERE (channel_id IS NULL OR channel_id = '' OR channel_id = 'null') AND (
            (sender_id = ? AND dm_recipient_id = ?) OR
            (sender_id = ? AND dm_recipient_id = ?)
          )
@@ -306,7 +312,7 @@ const handleGetDMMessages = async (req: AuthenticatedRequest, res: Response): Pr
     const before = req.query.before as string | undefined;
 
     let sql = `SELECT * FROM messages
-               WHERE channel_id IS NULL AND (
+               WHERE (channel_id IS NULL OR channel_id = '' OR channel_id = 'null') AND (
                  (sender_id = ? AND dm_recipient_id = ?) OR
                  (sender_id = ? AND dm_recipient_id = ?)
                )`;
@@ -377,7 +383,7 @@ const handleSendDM = async (req: AuthenticatedRequest, res: Response): Promise<v
 
     await withTransaction(async (conn) => {
       await conn.query(
-        'INSERT INTO messages (id, dm_recipient_id, sender_id, content, type, call_metadata, reply_to_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())',
+        'INSERT INTO messages (id, channel_id, dm_recipient_id, sender_id, content, type, call_metadata, reply_to_id, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NOW())',
         [messageId, recipientId, senderId, (content || '').trim(), msgType, metadataStr, reply_to_id || null]
       );
 
@@ -394,6 +400,13 @@ const handleSendDM = async (req: AuthenticatedRequest, res: Response): Promise<v
 
     const msgRows = await query<any[]>('SELECT * FROM messages WHERE id = ?', [messageId]);
     const populated = await populateMessages(msgRows, null);
+
+    // Broadcast to recipient and sender rooms immediately
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`user:${recipientId}`).to(`user:${senderId}`).emit('message:new', populated[0]);
+    }
+
     res.status(201).json(populated[0]);
   } catch (error) {
     console.error('Send DM error:', error);
@@ -457,6 +470,16 @@ const handleLogCallEvent = async (req: AuthenticatedRequest, res: Response): Pro
 
     const msgRows = await query<any[]>('SELECT * FROM messages WHERE id = ?', [messageId]);
     const populated = await populateMessages(msgRows, null);
+
+    const io = req.app.get('io');
+    if (io) {
+      if (recipientId) {
+        io.to(`user:${recipientId}`).to(`user:${callerId}`).emit('message:new', populated[0]);
+      } else if (channelId) {
+        io.to(`channel:${channelId}`).emit('message:new', populated[0]);
+      }
+    }
+
     res.status(201).json(populated[0]);
   } catch (error) {
     console.error('Log call event error:', error);
@@ -500,6 +523,16 @@ const handleEditMessage = async (req: AuthenticatedRequest, res: Response): Prom
     }
 
     const populated = await populateMessages(updated, serverId);
+
+    const io = req.app.get('io');
+    if (io) {
+      if (updated[0].channel_id) {
+        io.to(`channel:${updated[0].channel_id}`).emit('message:update', populated[0]);
+      } else if (updated[0].dm_recipient_id) {
+        io.to(`user:${updated[0].dm_recipient_id}`).to(`user:${userId}`).emit('message:update', populated[0]);
+      }
+    }
+
     res.json(populated[0]);
   } catch (error) {
     console.error('Edit message error:', error);
@@ -540,6 +573,16 @@ const handleDeleteMessage = async (req: AuthenticatedRequest, res: Response): Pr
     }
 
     await query('DELETE FROM messages WHERE id = ?', [messageId]);
+
+    const io = req.app.get('io');
+    if (io) {
+      if (msg.channel_id) {
+        io.to(`channel:${msg.channel_id}`).emit('message:delete', { messageId, channelId: msg.channel_id });
+      } else if (msg.dm_recipient_id) {
+        io.to(`user:${msg.dm_recipient_id}`).to(`user:${userId}`).emit('message:delete', { messageId, recipientId: msg.dm_recipient_id });
+      }
+    }
+
     res.json({ message: 'Üzenet sikeresen törölve' });
   } catch (error) {
     console.error('Delete message error:', error);
